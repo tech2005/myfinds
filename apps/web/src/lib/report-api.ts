@@ -119,6 +119,33 @@ const reportMatchesResponseSchema = z.object({
   ),
 });
 
+const staffMatchSideSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  category: z.enum(reportCategories),
+  description: z.string().nullable(),
+  brand: z.string().nullable(),
+  color: z.string().nullable(),
+  eventDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  place: z.object({ station: z.string(), city: z.string() }),
+});
+
+const staffMatchDetailsResponseSchema = z.object({
+  match: z.object({
+    id: z.string(),
+    score: z.number(),
+    scoreBreakdown: z.object({
+      place: z.number(),
+      text: z.number(),
+      date: z.number(),
+      attributes: z.number(),
+    }),
+    reasons: z.array(z.string()),
+    lost: staffMatchSideSchema,
+    found: staffMatchSideSchema,
+  }),
+});
+
 
 const createReportResponseSchema = z.object({
   report: z.object({
@@ -190,6 +217,7 @@ export type PrivateReportStatus = z.infer<typeof privateReportStatusSchema>;
 export type MyReport = z.infer<typeof myReportSchema>;
 export type ReportDetail = z.infer<typeof reportDetailSchema>["report"];
 export type ReportMatch = z.infer<typeof reportMatchesResponseSchema>;
+export type StaffMatchDetails = z.infer<typeof staffMatchDetailsResponseSchema>["match"];
 export type StaffQueueReport = z.infer<typeof staffQueueReportSchema>;
 
 export class ReportApiError extends Error {
@@ -471,6 +499,30 @@ export async function getStaffQueue(): Promise<StaffQueueReport[]> {
   return parsedQueue.data.reports;
 }
 
+export async function getStaffMatchDetails(
+  id: string,
+  request: typeof fetch = fetch,
+): Promise<StaffMatchDetails | null> {
+  const response = await request(getApiUrl(`/api/staff/matches/${encodeURIComponent(id)}`), {
+    cache: "no-store",
+    credentials: "include",
+  });
+  if (response.status === 404) return null;
+  const body = await parseApiBody(response);
+  if (!response.ok) {
+    const parsedError = errorResponseSchema.safeParse(body);
+    throw new ReportApiError(
+      parsedError.success ? parsedError.data.error.message : "Staff match details are unavailable.",
+      parsedError.success ? parsedError.data.error.code : "INVALID_RESPONSE",
+      response.status,
+    );
+  }
+
+  const parsed = staffMatchDetailsResponseSchema.safeParse(body);
+  if (!parsed.success) throw new Error("The staff match service returned an invalid response.");
+  return parsed.data.match;
+}
+
 export async function confirmReportReceipt(reportId: string): Promise<void> {
   const response = await fetch(getApiUrl(`/api/staff/reports/${reportId}/confirm-receipt`), {
     method: "POST",
@@ -542,8 +594,15 @@ export async function submitReportClaim(matchId: string, answers: string[]): Pro
   await postClaimAction("/api/claims", { matchId, answers }, "The claim could not be sent.");
 }
 
-export async function decideReportClaim(claimId: string, decision: "APPROVED" | "REJECTED"): Promise<void> {
-  await postClaimAction(`/api/claims/${claimId}/decision`, { decision }, "The claim decision failed.");
+export type ClaimDecisionAction =
+  | { decision: "APPROVED" }
+  | { decision: "REJECTED"; decisionNote: string };
+
+export async function decideReportClaim(
+  claimId: string,
+  action: ClaimDecisionAction,
+): Promise<void> {
+  await postClaimAction(`/api/claims/${claimId}/decision`, action, "The claim decision failed.");
 }
 
 export async function confirmReportHandover(claimId: string, code: string): Promise<void> {
