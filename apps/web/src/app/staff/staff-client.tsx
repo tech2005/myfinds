@@ -17,9 +17,11 @@ import {
   getStaffQueue,
   ReportApiError,
   type ClaimDecisionAction,
+  type HandoverIdType,
   type StaffClaim,
   type StaffQueueReport,
 } from "@/lib/report-api";
+import { staffMatchPath } from "@/lib/routes";
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   day: "numeric",
@@ -109,8 +111,8 @@ export default function StaffClient() {
     reloadClaims();
   }
 
-  async function handleHandover(claimId: string, code: string) {
-    await confirmReportHandover(claimId, code);
+  async function handleHandover(claimId: string, code: string, idType?: HandoverIdType) {
+    await confirmReportHandover(claimId, code, idType);
     toast.success("Handover confirmed. The item is marked returned.");
     reloadClaims();
   }
@@ -177,15 +179,23 @@ export default function StaffClient() {
           </div>
           <div className="mt-3 grid gap-3">
             {claims.map((claim) => (
-              <ClaimReview
-                key={claim.id}
-                claim={claim}
-                questions={claim.questions}
-                photos={claim.report.photos}
-                heading={`${claim.report.number} · ${claim.report.title}${claim.report.station ? ` · ${claim.report.station}` : ""}`}
-                onDecide={handleDecide}
-                onHandover={handleHandover}
-              />
+              <div key={claim.id}>
+                <Link
+                  href={staffMatchPath(claim.matchId)}
+                  className="mb-2 inline-flex text-sm font-medium underline-offset-4 hover:underline"
+                >
+                  Compare lost and found details
+                </Link>
+                <ClaimReview
+                  claim={claim}
+                  questions={claim.questions}
+                  photos={claim.report.photos}
+                  requiresIdType={claim.requiresIdType}
+                  heading={`${claim.report.number} · ${claim.report.title}${claim.report.station ? ` · ${claim.report.station}` : ""}`}
+                  onDecide={handleDecide}
+                  onHandover={handleHandover}
+                />
+              </div>
             ))}
           </div>
         </section>

@@ -13,8 +13,10 @@ import {
   InvalidClaimDecisionReasonError,
   InvalidHandoverCodeError,
   MatchNotFoundError,
+  MissingHandoverIdTypeError,
 } from "../services/claims";
 import { InvalidStatusTransitionError } from "../services/status-transitions";
+import { consumeClaimSubmitLimit, consumeHandoverAttemptLimit } from "../rate-limit";
 import { auth, db, describeError } from "../services";
 
 type Session = {
@@ -39,8 +41,12 @@ const decisionSchema = z.discriminatedUnion("decision", [
   }),
 ]);
 
+const handoverIdTypes = ["GOVERNMENT_ID", "DRIVING_LICENCE", "PASSPORT", "OTHER"] as const;
+
 const handoverSchema = z.object({
   code: z.string().trim().regex(/^\d{6}$/),
+  // BR-21: the ID type checked at the counter, never the ID number.
+  idType: z.enum(handoverIdTypes).optional(),
 });
 
 export function createClaimsRouter({ database, getSession }: ClaimsRouterDependencies) {
@@ -91,6 +97,12 @@ export function createClaimsRouter({ database, getSession }: ClaimsRouterDepende
       });
       return;
     }
+    if (error instanceof MissingHandoverIdTypeError) {
+      response.status(422).json({
+        error: { code: "VALIDATION_FAILED", message: error.message },
+      });
+      return;
+    }
     if (error instanceof ClaimNotAllowedError || error instanceof InvalidHandoverCodeError) {
       response.status(422).json({ error: { code: "INVALID_CLAIM", message: error.message } });
       return;
@@ -109,6 +121,14 @@ export function createClaimsRouter({ database, getSession }: ClaimsRouterDepende
       response
         .status(401)
         .json({ error: { code: "UNAUTHENTICATED", message: "Sign in to submit a claim." } });
+      return;
+    }
+    const rateLimit = consumeClaimSubmitLimit(actor.userId);
+    if (!rateLimit.allowed) {
+      response.setHeader("Retry-After", String(rateLimit.retryAfterSeconds));
+      response.status(429).json({
+        error: { code: "RATE_LIMITED", message: "Too many claim attempts. Try again later." },
+      });
       return;
     }
     const parsed = createClaimSchema.safeParse(request.body);
@@ -182,10 +202,19 @@ export function createClaimsRouter({ database, getSession }: ClaimsRouterDepende
         .json({ error: { code: "VALIDATION_FAILED", message: "Enter the 6-digit code." } });
       return;
     }
+    const rateLimit = consumeHandoverAttemptLimit(request.params.id);
+    if (!rateLimit.allowed) {
+      response.setHeader("Retry-After", String(rateLimit.retryAfterSeconds));
+      response.status(429).json({
+        error: { code: "RATE_LIMITED", message: "Too many handover code attempts. Try again later." },
+      });
+      return;
+    }
 
     try {
       const result = await confirmHandover(database, request.params.id, {
         code: parsed.data.code,
+        idType: parsed.data.idType,
         ...actor,
       });
       response.json({ claim: result });
